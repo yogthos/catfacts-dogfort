@@ -1,39 +1,45 @@
 (ns catfacts.core
-  (:use-macros [dogfort.middleware.routes-macros :only [GET]])
+  (:use-macros [dogfort.middleware.routes-macros :only [defroutes GET]])
   (:require [dogfort.http :refer [run-http]]
             [cljs.nodejs]
             [cljs.reader :as reader]
-            [dogfort.middleware.defaults :as defaults]
-            [dogfort.middleware.routes]))
-
-(def fs (js/require "fs"))
-
-(defn catfact [facts]
-  (let [idx (rand-int (:fact-count facts))
-        fact (get-in facts [:facts idx])]
-    (str "Cat Fact " (inc idx) ": " fact "\n:cat: :cat: :cat:")))
+            [redlobster.promise :as p]
+            [dogfort.middleware.routes :refer [routes]]))
 
 (cljs.nodejs/enable-util-print!)
 
-(defn server [facts]
-  (-> (GET "/" req
-           {:status 200
-            :body (-> {:response_type "in_channel"
-                       :text (catfact facts)}
-                      (clj->js)
-                      (js/JSON.stringify))})
-      (defaults/wrap-defaults {})
-      (run-http {:port (or (.-PORT (.-env js/process)) 5000)})))
+(def fs (js/require "fs"))
 
-(defn start-app [err data]
-  (if err
-    (throw (js/Error. err))
-    (let [fact-data (reader/read-string data)
-          facts {:facts fact-data
-                 :fact-count (count fact-data)}]
-      (server facts))))
+(defn read-file [file]
+  (.readFileSync fs file "utf8"))
+
+(defn json-response [m]
+  (-> m clj->js js/JSON.stringify))
+
+(defn catfact [{:keys [facts fact-count]}]
+  (let [idx (rand-int fact-count)
+        fact (get-in facts [idx])]
+    (str "Cat Fact " (inc idx) ": " fact "\n:cat: :cat: :cat:")))
+
+(defn app [facts]
+  (fn [request]
+    (p/promise
+     {:status 200
+      :body (json-response
+             {:response_type "in_channel"
+              :text (catfact facts)})}
+     #_(GET "/" req
+                   {:status 200
+                    :body (json-response
+                           {:response_type "in_channel"
+                            :text (catfact facts)})}))))
 
 (defn main [& args]
-  (.readFile fs "catfacts.edn" "utf8" start-app))
+  (let [fact-data (-> "catfacts.edn" read-file reader/read-string)
+        handler (app {:facts fact-data
+                      :fact-count (count fact-data)})]
+    (run-http
+     handler
+     {:port (or (-> js/process .-env .-PORT) 5000)})))
 
 (set! *main-cli-fn* main)
